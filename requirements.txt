@@ -1,0 +1,6 @@
+pandas
+selenium
+PyQt6
+webdriver-manager
+tqdm
+packaging

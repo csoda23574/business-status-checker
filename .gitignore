@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# Chrome WebDriver
+chromedriver.exe
+
+# Project specific
+*.csv
+!requirements.txt
+*.spec
+
+# Jupyter Notebook
+.ipynb_checkpoints/
