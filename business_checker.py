@@ -84,103 +84,100 @@ class BusinessCheckWorker(QThread):
                 if not self.init_driver():
                     self.error_occurred.emit("Chrome 드라이버 초기화에 실패했습니다.")
                     return
+
+            total_count = len(self.df)
             
-            while self.is_running:
-                # 일시정지 상태면 대기
-                if self.is_paused:
-                    QThread.msleep(100)
+            # 작업이 이미 완료된 경우 즉시 종료
+            if self.last_index >= total_count - 1:
+                self.finished.emit(self.results)
+                return
+            
+            for idx, row in enumerate(self.df.itertuples(), 1):
+                # 이전 작업 건너뛰기
+                if idx <= self.last_index:
                     continue
-
-                total_count = len(self.df)
-                
-                # 이미 모든 작업이 완료된 경우 종료
-                if self.last_index >= total_count - 1:
-                    self.finished.emit(self.results)
+                    
+                if not self.is_running or self.is_paused:
                     break
-                
-                # 메인 작업 루프
-                for idx, row in enumerate(self.df.itertuples(), 1):
-                    if idx <= self.last_index:
-                        continue
-                        
-                    if not self.is_running or self.is_paused:
-                        break
 
-                    if not self.check_driver_alive():
-                        self.last_index = idx - 1
-                        self.progress_updated.emit(idx-1, row.현장명, "일시정지")
-                        self.is_paused = True
-                        self.chrome_closed.emit()
-                        return  # run 메서드 종료
+                # Chrome 창 상태 체크
+                if not self.check_driver_alive():
+                    self.last_index = idx - 1
+                    self.progress_updated.emit(idx-1, row.현장명, "일시정지")
+                    self.is_paused = True
+                    self.chrome_closed.emit()
+                    return
 
-                    try:
-                        business_number = str(row.사업장등록번호)
-                        store_name = row.현장명
-                        retry_count = 0
-                        
-                        while retry_count < 3 and self.is_running:
+                try:
+                    business_number = str(row.사업장등록번호)
+                    store_name = row.현장명
+                    current_idx = idx  # 현재 처리 중인 인덱스 저장
+                    retry_count = 0
+                    
+                    while retry_count < 3 and self.is_running:
+                        try:
+                            if self.driver is None:
+                                raise Exception("Chrome 드라이버가 초기화되지 않았습니다.")
+                                
+                            # 홈택스 페이지 로딩
+                            url = 'https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml&tmIdx=43&tm2lIdx=4306000000&tm3lIdx=4306080000'
                             try:
-                                if self.driver is None:
-                                    raise Exception("Chrome 드라이버가 초기화되지 않았습니다.")
-                                    
-                                # 홈택스 페이지 로딩
-                                url = 'https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml&tmIdx=43&tm2lIdx=4306000000&tm3lIdx=4306080000'
-                                try:
-                                    self.driver.get(url)
-                                except Exception:
-                                    if not self.check_driver_alive():
-                                        raise Exception("Chrome이 종료됨")
-                                    raise
-                                    
-                                time.sleep(1.75)
+                                self.driver.get(url)
+                            except Exception:
+                                if not self.check_driver_alive():
+                                    raise Exception("Chrome이 종료됨")
+                                raise
                                 
-                                input_field = self.driver.find_element(By.ID, 'mf_txppWframe_bsno')
-                                input_field.clear()
-                                input_field.send_keys(business_number)
-                                
-                                search_button = self.driver.find_element(By.ID, 'mf_txppWframe_trigger5')
-                                search_button.click()
-                                
-                                wait = WebDriverWait(self.driver, 10)
-                                result = wait.until(EC.presence_of_element_located((By.ID, 'mf_txppWframe_grid2_cell_0_1')))
-                                status = result.text
-                                
+                            time.sleep(1.75)
+                            
+                            input_field = self.driver.find_element(By.ID, 'mf_txppWframe_bsno')
+                            input_field.clear()
+                            input_field.send_keys(business_number)
+                            
+                            search_button = self.driver.find_element(By.ID, 'mf_txppWframe_trigger5')
+                            search_button.click()
+                            
+                            wait = WebDriverWait(self.driver, 10)
+                            result = wait.until(EC.presence_of_element_located((By.ID, 'mf_txppWframe_grid2_cell_0_1')))
+                            status = result.text
+                            
+                            self.results.append({
+                                '현장명': store_name,
+                                '사업장등록번호': business_number,
+                                '조회결과': status
+                            })
+                            
+                            self.progress_updated.emit(current_idx, store_name, f"[{current_idx}/{total_count}]: {store_name} - {status}")
+                            time.sleep(1.75)
+                            break
+                            
+                        except Exception as e:
+                            if not self.check_driver_alive():
+                                raise Exception("Chrome이 종료됨")
+                            retry_count += 1
+                            if retry_count < 3:
+                                self.progress_updated.emit(idx, store_name, f"재시도 {retry_count}/3")
+                                time.sleep(2)
+                            else:
+                                self.progress_updated.emit(idx, store_name, "조회 실패")
                                 self.results.append({
                                     '현장명': store_name,
                                     '사업장등록번호': business_number,
-                                    '조회결과': status
+                                    '조회결과': '조회 실패'
                                 })
-                                
-                                self.progress_updated.emit(idx, store_name, status)
-                                time.sleep(1.75)
-                                break
-                                
-                            except Exception as e:
-                                if not self.check_driver_alive():
-                                    raise Exception("Chrome이 종료됨")
-                                retry_count += 1
-                                if retry_count < 3:
-                                    self.progress_updated.emit(idx, store_name, f"재시도 {retry_count}/3")
-                                    time.sleep(2)
-                                else:
-                                    self.progress_updated.emit(idx, store_name, "조회 실패")
-                                    self.results.append({
-                                        '현장명': store_name,
-                                        '사업장등록번호': business_number,
-                                        '조회결과': '조회 실패'
-                                    })
-                        
-                    except Exception as e:
-                        if not self.check_driver_alive():
-                            self.last_index = idx - 1
-                            self.is_paused = True
-                            self.chrome_closed.emit()
-                            break
+                    
+                except Exception as e:
+                    if not self.check_driver_alive():
+                        self.last_index = idx - 1
+                        self.is_paused = True
+                        self.chrome_closed.emit()
+                        break
 
-                if self.last_index >= total_count - 1:
+                # 작업 완료 체크
+                if idx >= total_count:
                     if self.is_running:
                         self.finished.emit(self.results)
-                    break
+                    return
 
         except Exception as e:
             self.error_occurred.emit(f"조회 중 오류가 발생했습니다: {str(e)}")
@@ -301,6 +298,12 @@ class BusinessChecker(QMainWindow):
         self.is_paused = False
         self.last_index = 0  # 마지막으로 처리한 인덱스 저장
         self.worker = None  # worker는 start_check에서 초기화됨
+        
+        # 상태 메시지 버퍼 추가
+        self.status_buffer = []
+        self.status_update_timer = QTimer()
+        self.status_update_timer.timeout.connect(self.flush_status_buffer)
+        self.status_update_timer.start(100)  # 100ms마다 업데이트
 
     def toggle_pause(self):
         if not self.worker:
@@ -386,41 +389,78 @@ class BusinessChecker(QMainWindow):
             self.status.append(f"전체 오류 발생: {str(e)}")
             self.reset_state()
 
+    def update_status(self, message):
+        """상태 메시지 버퍼링"""
+        self.status_buffer.append(message)
+        if len(self.status_buffer) > 1000:  # 버퍼 크기 제한
+            self.status.clear()
+            self.status_buffer = self.status_buffer[-500:]
+    
+    def flush_status_buffer(self):
+        """버퍼된 메시지 일괄 업데이트"""
+        if self.status_buffer:
+            self.status.append("\n".join(self.status_buffer))
+            scrollbar = self.status.verticalScrollBar()
+            if scrollbar is not None:  # None 체크 추가
+                scrollbar.setValue(scrollbar.maximum() or 0)  # None 체크 추가
+            self.status_buffer.clear()
+
     def update_progress(self, index, store_name, status):
         self.progress.setValue(index)
         
-        # HTML 스타일을 사용하여 색상 적용
         if "재시도" in status:
-            self.status.append(f'<span style="color: red;">오류 발생</span>: {store_name} - 재시도 {status.split("/")[0][-1]}/3')
-        elif status == "일시정지":  # 일시정지 상태일 때 처리 추가
-            self.status.append(f'Chrome 종료 감지 - <span style="color: red;">일시정지</span>')
+            message = f'<span style="color: red;">오류 발생</span>: {store_name} - 재시도 {status.split("/")[0][-1]}/3'
+        elif status == "일시정지":
+            message = f'Chrome 종료 감지 - <span style="color: red;">일시정지</span>'
         else:
-            if "조회 실패" in status:
-                prefix = '<span style="color: red;">오류 발생</span>'
-            else:
-                prefix = '<span style="color: #0066ff;">조회 완료</span>'
-            self.status.append(f"{prefix}: {store_name} - {status}")
+            # 조회 결과에서 인덱스 정보와 결과 추출
+            try:
+                if "[" in status and "]" in status:
+                    # [숫자/전체]: 상호명 - 결과 형식 파싱
+                    index_info, content = status.split(": ", 1)
+                    if "조회 실패" in content:
+                        prefix = '<span style="color: red;">오류 발생</span>'
+                    else:
+                        prefix = '<span style="color: #0066ff;">조회 완료</span>'
+                    message = f"{prefix}{index_info}: {content}"
+                else:
+                    # 기존 형식 유지
+                    if "조회 실패" in status:
+                        prefix = '<span style="color: red;">오류 발생</span>'
+                    else:
+                        prefix = '<span style="color: #0066ff;">조회 완료</span>'
+                    message = f"{prefix}: {store_name} - {status}"
+            except:
+                # 파싱 실패시 기본 형식 사용
+                message = f"조회 완료: {store_name} - {status}"
+            
+        self.update_status(message)
 
     def save_results(self, results):
-        results_df = pd.DataFrame(results)
+        # 결과 파일 생성
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        results_df.to_csv(f'business_status_{timestamp}.csv', index=False, encoding='utf-8-sig')
+        output_filename = f'business_status_{timestamp}.csv'
+        results_df = pd.DataFrame(results)
+        results_df.to_csv(output_filename, index=False, encoding='utf-8-sig')
         
         # 통계 정보 계산
-        if self.df is not None:  # None 체크 추가
+        if self.df is not None:
             total_count = len(self.df)
             failed_count = len(results_df[results_df['조회결과'].str.contains('조회 실패', na=False)])
             success_count = total_count - failed_count
             closed_count = len(results_df[results_df['조회결과'].str.contains('휴업|폐업', na=False)])
             
-            # 결과 표시
+            # 결과 표시 (파일 경로 포함)
             self.status.append("\n=== 조회 결과 요약 ===")
             self.status.append(f"전체 사업장: {total_count}개")
             self.status.append(f"조회된 사업장: {success_count}개")
             self.status.append(f"조회되지 않은 사업장: {failed_count}개")
             self.status.append(f"휴/폐업 사업장: {closed_count}개")
+            self.status.append("-------------------")
+            self.status.append(f"저장 위치: {os.path.abspath(output_filename)}")
             self.status.append("===================\n")
         
+        # 버튼 상태 업데이트
         self.filter_btn.setEnabled(True)
         self.pause_btn.setEnabled(False)
         self.stop_btn.setEnabled(False)
@@ -440,27 +480,31 @@ class BusinessChecker(QMainWindow):
             latest_file = max(files, key=os.path.getctime)
             df = pd.read_csv(latest_file)
             
+            # 휴/폐업 업체 필터링
             closed_businesses = df[df['조회결과'].str.contains('휴업|폐업', na=False)]
-            result = closed_businesses[['현장명', '사업장등록번호', '조회결과']]
             
+            # 원본 데이터프레임에서의 인덱스 위치 찾기
+            original_indices = df[df['조회결과'].str.contains('휴업|폐업', na=False)].index
+            
+            self.status.append("\n=== 휴/폐업 사업장 목록 ===")
+            if len(closed_businesses) > 0:
+                for idx, (_, row) in enumerate(closed_businesses.iterrows()):
+                    original_idx = original_indices[idx] + 1  # 1-based index
+                    status_color = "red" if "폐업" in row['조회결과'] else "orange"
+                    self.status.append(
+                        f'<span style="color: {status_color}">'
+                        f'[{original_idx}] {row["현장명"]} '
+                        f'(사업장 등록번호: {row["사업장등록번호"]})'
+                        f'</span>'
+                    )
+            else:
+                self.status.append("휴/폐업 사업장이 없습니다.")
+            
+            # 결과 파일 저장
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             output_filename = f'closed_businesses_{timestamp}.csv'
-            result.to_csv(output_filename, index=False, encoding='utf-8-sig')
-            
-            # 통계 정보 업데이트
-            total_count = len(df)
-            failed_count = len(df[df['조회결과'].str.contains('조회 실패', na=False)])
-            success_count = total_count - failed_count
-            closed_count = len(result)
-            
-            self.status.append("\n=== 휴/폐업 필터링 결과 ===")
-            self.status.append(f"전체 사업장: {total_count}개")
-            self.status.append(f"조회된 사업장: {success_count}개")
-            self.status.append(f"조회되지 않은 사업장: {failed_count}개")
-            self.status.append(f"휴/폐업 사업장: {closed_count}개")
-            self.status.append("===================\n")
-            
-            self.status.append(f"결과가 {output_filename}에 저장되었습니다.")
+            closed_businesses.to_csv(output_filename, index=False, encoding='utf-8-sig')
+            self.status.append(f"\n파일 저장 완료: {output_filename}")
             
         except Exception as e:
             self.status.append(f"필터링 중 오류 발생: {str(e)}")
@@ -507,31 +551,55 @@ class BusinessChecker(QMainWindow):
     def force_quit(self):
         """앱의 모든 프로세스를 즉시 강제 종료"""
         try:
+            # Chrome 드라이버 정리
             if self.worker:
-                # 워커가 실행 중이면 즉시 중지
                 self.worker.is_running = False
                 if self.worker.driver:
                     try:
-                        # 메인 페이지로 이동하여 리소스 해제 촉진
                         self.worker.driver.get('about:blank')
+                        self.worker.driver.quit()
                     except:
                         pass
                     finally:
-                        # 드라이버 강제 종료
-                        self.worker.driver.quit()
+                        self.worker.driver = None
+                
                 # 워커 스레드 강제 종료
                 self.worker.terminate()
+                self.worker.wait(1000)  # 최대 1초 대기
                 self.worker = None
+            
+            # 타이머 정리
+            if hasattr(self, 'status_update_timer'):
+                self.status_update_timer.stop()
+                self.status_update_timer.deleteLater()
+            
+            # 메모리 정리
+            QApplication.processEvents()
+            
+            # 프로세스 강제 종료
+            import os
+            import psutil  # psutil 추가
+            
+            try:
+                # 현재 프로세스와 자식 프로세스 모두 종료
+                current_process = psutil.Process(os.getpid())
+                children = current_process.children(recursive=True)
+                for child in children:
+                    child.kill()
+                current_process.kill()
+            except:
+                # 마지막 수단으로 os._exit 사용
+                os._exit(0)
+            
         except:
-            pass
-        finally:
-            # 앱 즉시 종료
-            QApplication.exit(0)
+            # 모든 방법이 실패하면 가장 강력한 종료
+            import os
+            os._exit(0)  # sys._exit 대신 os._exit 사용
 
     def closeEvent(self, event):
-        """창 닫기 이벤트를 비동기로 처리"""
-        event.ignore()  # 기본 종료 동작 무시
-        QTimer.singleShot(0, self.force_quit)  # 비동기 종료
+        """창 닫기 이벤트 처리"""
+        event.ignore()
+        self.force_quit()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

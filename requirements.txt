@@ -1,6 +1,8 @@
-pandas
-selenium
-PyQt6
-webdriver-manager
-tqdm
-packaging
+﻿pandas>=2.0.0
+selenium>=4.0.0
+PyQt6>=6.4.0
+webdriver-manager>=4.0.0
+tqdm>=4.65.0
+packaging>=23.0
+pywin32>=305
+psutil>=5.9.0

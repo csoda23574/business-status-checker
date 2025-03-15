@@ -20,6 +20,10 @@ ENV/
 # Chrome WebDriver
 chromedriver.exe
 
+# Executable
+*.exe
+사업장 정보 조회.exe
+
 # Project specific
 *.csv
 !requirements.txt
